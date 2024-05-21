@@ -8,7 +8,6 @@ import seaborn as sns
 file_path = 'monthly.csv'  
 
 data = pd.read_csv(file_path, parse_dates=['Date'], index_col='Date')
-
 column_name = 'Price'  
 
 sns.lineplot(data=data, x=data.index, y=column_name)
