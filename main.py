@@ -1,48 +1,77 @@
 import pandas as pd
+import numpy as np
+from scipy.optimize import minimize
 import matplotlib.pyplot as plt
-from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
-plt.switch_backend('TkAgg')
+import matplotlib
+matplotlib.use('TkAgg')
 
 file_path = 'monthly.csv'
 data = pd.read_csv(file_path)
+data['Date'] = pd.to_datetime(data['Date'])
+data.set_index('Date', inplace=True)
 
-data['Date'] = pd.to_datetime(data['Date'], format='%Y-%m')
-data = data.set_index('Date')
-data = data.asfreq('MS')
+def lppl(t, tc, m, w, phi, A, B, C):
+    epsilon = 0.01
+    adjusted_time = np.maximum(tc - t, epsilon)
 
-data_1970_1980 = data['1970-01-01':'1980-12-31']
-data_2008_2013 = data['2008-01-01':'2013-12-31']
+    return A + B * (adjusted_time ** m) * (1 + C * np.cos(w * np.log(adjusted_time) + phi))
 
-model_1970_1980 = MarkovRegression(data_1970_1980['Price'], k_regimes=2, trend='c')
-results_1970_1980 = model_1970_1980.fit()
+time_windows = {
+    '1979-1980': ('1979-01-01', '1980-12-31'),
+    '2008': ('2008-01-01', '2008-12-31'),
+    '2011': ('2011-01-01', '2011-12-31')
+}
+data_windows = {key: data.loc[start:end] for key, (start, end) in time_windows.items()}
 
-model_2008_2013 = MarkovRegression(data_2008_2013['Price'], k_regimes=2, trend='c')
-results_2008_2013 = model_2008_2013.fit()
+def fit_lppl(data, start_date, end_date):
+    window_data = data.loc[start_date:end_date]
+    prices = window_data['Price']
+    t = np.arange(len(prices))
+    params_initial = [max(t) + 100, 0.5, 7.0, 2.0, np.mean(prices), -100, 10]
 
-fig, ax = plt.subplots(figsize=(12, 6))
-data_1970_1980['Price'].plot(ax=ax, color='k', lw=1, label='Preis')
-regime_1970_1980_0 = results_1970_1980.smoothed_marginal_probabilities[0]
-regime_1970_1980_1 = results_1970_1980.smoothed_marginal_probabilities[1]
+    def objective(params):
+        fit = lppl(t, *params)
+        residuals = prices - fit
+        return np.sum(residuals ** 2)
 
-ax.fill_between(data_1970_1980.index, 0, 1, where=regime_1970_1980_0 > 0.5, color='green', alpha=0.2, transform=ax.get_xaxis_transform(), label='Wahrscheinlichkeit von Regime 0')
-ax.fill_between(data_1970_1980.index, 0, 1, where=regime_1970_1980_1 > 0.5, color='yellow', alpha=0.2, transform=ax.get_xaxis_transform(), label='Wahrscheinlichkeit von Regime 1')
+    result = minimize(objective, params_initial, method='L-BFGS-B')
+    return result
 
-plt.xlabel('Datum')
-plt.ylabel('Preis')
-plt.title('Analyse des Zeitraum 1970-1980 mit Markov Regime Switching Model')
-plt.legend()
-plt.show()
+    params_initial = [max(t) + 50, 0.5, 10, 2 * np.pi, np.mean(prices), -np.mean(prices), 0]
+    bounds = [(max(t), 2 * max(t)), (0.1, 0.9), (5, 15), (0, 2 * np.pi), (0, 2 * np.max(prices)),
+              (-2 * np.max(prices), 0), (-10, 10)]
+    result = minimize(objective, params_initial, bounds=bounds, method='L-BFGS-B')
 
-fig, ax = plt.subplots(figsize=(12, 6))
-data_2008_2013['Price'].plot(ax=ax, color='k', lw=1, label='Preis')
-regime_2008_2013_0 = results_2008_2013.smoothed_marginal_probabilities[0]
-regime_2008_2013_1 = results_2008_2013.smoothed_marginal_probabilities[1]
+    def objective(params):
+        try:
+            fit = lppl(t, *params)
+            residuals = prices - fit
+            if np.any(np.isnan(residuals)):
+                return np.inf
+            return np.sum(residuals ** 2)
+        except Exception as e:
+            print(f"Error during optimization: {e}")
+            return np.inf
 
-ax.fill_between(data_2008_2013.index, 0, 1, where=regime_2008_2013_0 > 0.5, color='green', alpha=0.2, transform=ax.get_xaxis_transform(), label='Wahrscheinlichkeit von Regime 0')
-ax.fill_between(data_2008_2013.index, 0, 1, where=regime_2008_2013_1 > 0.5, color='yellow', alpha=0.2, transform=ax.get_xaxis_transform(), label='Wahrscheinlichkeit von Regime 1')
+    results = {window: fit_lppl(data, *time_windows[window]) for window in time_windows}
+    return result
 
-plt.xlabel('Datum')
-plt.ylabel('Preis')
-plt.title('Analyse des Zeitraum 2008-2013 mit Markov Regime Switching Model)')
-plt.legend()
-plt.show()
+results = {window: fit_lppl(data, *time_windows[window]) for window in time_windows}
+
+def plot_results(window):
+    result = results[window]  
+    prices = data_windows[window]['Price']
+    t = np.arange(len(prices))
+    fitted_prices = lppl(t, *result.x)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(prices.index, prices, label='Wert von Gold')
+    plt.plot(prices.index, fitted_prices, label='LPPL Methode', linestyle='--')
+    plt.title(f'LPPL Methode für den Zeitpunkt {window}')
+    plt.xlabel('Jahr')
+    plt.ylabel('Preis')
+    plt.legend()
+    plt.show()
+
+for window in time_windows:
+    plot_results(window)
